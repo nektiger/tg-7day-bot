@@ -2,9 +2,9 @@ services:
   - type: web
     name: tg-7day-bot
     env: python
-    buildCommand: ""
-    startCommand: python main.py
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
     envVars:
       - key: TOKEN
-        value: your_token_here
+        value: 8467489835:AAF09FNV4dW1DVAMikyZeq1eIRu7oZgabws
     autoDeploy: true
