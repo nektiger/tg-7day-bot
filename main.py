@@ -1,4 +1,3 @@
-import os
 import json
 import aiosqlite
 from datetime import datetime
@@ -8,20 +7,25 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes
 )
+import os
+import nest_asyncio
 
 TOKEN = os.getenv("TOKEN")
 
 def load_tasks():
-    base_dir = os.path.dirname(os.path.abspath(__file__))  # Абсолютный путь к папке с main.py
-    path = os.path.join(base_dir, "tasks.json")
-    with open(path, "r", encoding="utf-8") as f:
+    with open("tasks.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
 def generate_day_keyboard(user_progress):
     buttons = []
     for i in range(1, 8):
         unlocked = str(i) == "1" or str(i - 1) in user_progress
-        text = f"✅ День {i}" if str(i) in user_progress else f"🔓 День {i}" if unlocked else f"🔒 День {i}"
+        if str(i) in user_progress:
+            text = f"✅ День {i}"
+        elif unlocked:
+            text = f"🔓 День {i}"
+        else:
+            text = f"🔒 День {i}"
         cb_data = f"day_{i}" if unlocked else "locked"
         buttons.append(InlineKeyboardButton(text, callback_data=cb_data))
     return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
@@ -53,9 +57,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("day_"):
         day = data.split("_")[1]
         tasks = load_tasks()
-        # Отладочный вывод — можно потом убрать
-        print(f"DEBUG tasks type: {type(tasks)}")  
-        print(f"DEBUG tasks content: {tasks}")     
         task = tasks.get(day, "❌ Задание не найдено.")
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
@@ -92,7 +93,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             completed = sorted([int(row[0]) for row in await cursor.fetchall()])
     count = len(completed)
-    done = ", ".join([f"{i}" for i in completed]) if completed else "пока ничего"
+    done = ", ".join([str(i) for i in completed]) if completed else "пока ничего"
     await update.message.reply_text(
         f"📊 Твоя статистика:\n\n"
         f"Выполнено дней: {count} из 7\n"
@@ -109,7 +110,7 @@ async def send_daily_tasks(app):
                 if now_day in tasks:
                     try:
                         await app.bot.send_message(chat_id=user_id, text=f"🌞 Доброе утро!\nВот задание на день {now_day}:\n\n{tasks[now_day]}")
-                    except:
+                    except Exception:
                         pass
 
 async def init_db():
@@ -141,4 +142,6 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    import nest_asyncio
+    nest_asyncio.apply()
+    asyncio.get_event_loop().run_until_complete(main())
