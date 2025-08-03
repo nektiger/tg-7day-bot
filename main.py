@@ -1,5 +1,10 @@
+import nest_asyncio
+nest_asyncio.apply()
+
+import os
 import json
 import aiosqlite
+import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,7 +12,6 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes
 )
-import os
 
 TOKEN = os.getenv("TOKEN")
 
@@ -134,8 +138,5 @@ async def main():
     print("✅ Бот запущен")
     await app.run_polling()
 
-
 if __name__ == "__main__":
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
