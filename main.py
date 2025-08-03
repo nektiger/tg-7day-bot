@@ -1,3 +1,6 @@
+import telegram
+print("python-telegram-bot version:", telegram.__version__)
+
 import json
 import aiosqlite
 from datetime import datetime
