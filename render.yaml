@@ -4,9 +4,7 @@ services:
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
-envVars:
-  - key: TOKEN
-    value: ${TOKEN}
-    autoDeploy: true
-V4dW1DVAMikyZeq1eIRu7oZgabws
-    autoDeploy: true
+    autoDeploy: false  # 🚫 отключаем автоматический деплой
+    envVars:
+      - key: TOKEN
+        value: ${TOKEN}
