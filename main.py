@@ -1,5 +1,6 @@
 import json
 import aiosqlite
+import os
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,19 +8,22 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes
 )
-import os
-import nest_asyncio
 
 TOKEN = os.getenv("TOKEN")
 
 def load_tasks():
     with open("tasks.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+        tasks = json.load(f)
+        # Проверяем, что вернулся словарь
+        if not isinstance(tasks, dict):
+            raise ValueError("tasks.json должен содержать объект JSON (словарь).")
+        return tasks
 
 def generate_day_keyboard(user_progress):
     buttons = []
     for i in range(1, 8):
-        unlocked = str(i) == "1" or str(i - 1) in user_progress
+        # Первый день всегда разблокирован, остальные — если предыдущий день выполнен
+        unlocked = (i == 1) or (str(i - 1) in user_progress)
         if str(i) in user_progress:
             text = f"✅ День {i}"
         elif unlocked:
@@ -28,6 +32,7 @@ def generate_day_keyboard(user_progress):
             text = f"🔒 День {i}"
         cb_data = f"day_{i}" if unlocked else "locked"
         buttons.append(InlineKeyboardButton(text, callback_data=cb_data))
+    # Кнопки по 3 в ряд
     return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -40,7 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n"
-        f"Здесь ты найдешь задания на 7 дней.\n"
+        f"Здесь ты найдёшь задания на 7 дней.\n"
         f"Выбирай день ниже 👇",
         reply_markup=generate_day_keyboard(user_progress)
     )
@@ -56,8 +61,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("day_"):
         day = data.split("_")[1]
-        tasks = load_tasks()
-        task = tasks.get(day, "❌ Задание не найдено.")
+        try:
+            tasks = load_tasks()
+        except Exception as e:
+            await query.answer(f"Ошибка загрузки заданий: {e}", show_alert=True)
+            return
+
+        # Проверяем, что tasks — словарь
+        if isinstance(tasks, dict):
+            task = tasks.get(day, "❌ Задание не найдено.")
+        else:
+            task = "❌ Формат заданий неверный."
+
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
             reply_markup=InlineKeyboardMarkup([
@@ -127,8 +142,8 @@ async def init_db():
 
 async def main():
     await init_db()
-
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(button))
@@ -141,7 +156,8 @@ async def main():
     await app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
     import nest_asyncio
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
+    import asyncio
+
+    nest_asyncio.apply()  # чтобы избежать ошибки "event loop already running"
+    asyncio.run(main())
