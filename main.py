@@ -1,8 +1,6 @@
-import json
 import os
-import asyncio
+import json
 import aiosqlite
-import nest_asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,46 +11,35 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 
-
 def load_tasks():
-    with open("tasks.json", "r", encoding="utf-8") as f:
+    base_dir = os.path.dirname(os.path.abspath(__file__))  # Абсолютный путь к папке с main.py
+    path = os.path.join(base_dir, "tasks.json")
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def generate_day_keyboard(user_progress):
     buttons = []
     for i in range(1, 8):
-        unlocked = i == 1 or str(i - 1) in user_progress
+        unlocked = str(i) == "1" or str(i - 1) in user_progress
         text = f"✅ День {i}" if str(i) in user_progress else f"🔓 День {i}" if unlocked else f"🔒 День {i}"
         cb_data = f"day_{i}" if unlocked else "locked"
         buttons.append(InlineKeyboardButton(text, callback_data=cb_data))
     return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
 
     async with aiosqlite.connect("database.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS progress (
-                user_id INTEGER,
-                day TEXT,
-                completed_at TEXT,
-                PRIMARY KEY (user_id, day)
-            );
-        """)
-        await db.commit()
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             user_progress = {row[0] for row in await cursor.fetchall()}
 
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n"
-        f"Здесь ты найдёшь задания на 7 дней.\n"
+        f"Здесь ты найдешь задания на 7 дней.\n"
         f"Выбирай день ниже 👇",
         reply_markup=generate_day_keyboard(user_progress)
     )
-
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -66,6 +53,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("day_"):
         day = data.split("_")[1]
         tasks = load_tasks()
+        # Отладочный вывод — можно потом убрать
+        print(f"DEBUG tasks type: {type(tasks)}")  
+        print(f"DEBUG tasks content: {tasks}")     
         task = tasks.get(day, "❌ Задание не найдено.")
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
@@ -76,6 +66,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("done_"):
         day = data.split("_")[1]
+
         async with aiosqlite.connect("database.db") as db:
             async with db.execute("SELECT 1 FROM progress WHERE user_id = ? AND day = ?", (user_id, day)) as cursor:
                 if await cursor.fetchone():
@@ -86,6 +77,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (user_id, day, datetime.utcnow().isoformat())
             )
             await db.commit()
+
             async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
                 user_progress = {row[0] for row in await cursor.fetchall()}
 
@@ -94,20 +86,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=generate_day_keyboard(user_progress)
         )
 
-
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     async with aiosqlite.connect("database.db") as db:
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             completed = sorted([int(row[0]) for row in await cursor.fetchall()])
     count = len(completed)
-    done = ", ".join(map(str, completed)) if completed else "пока ничего"
+    done = ", ".join([f"{i}" for i in completed]) if completed else "пока ничего"
     await update.message.reply_text(
         f"📊 Твоя статистика:\n\n"
         f"Выполнено дней: {count} из 7\n"
         f"Завершено: {done}"
     )
-
 
 async def send_daily_tasks(app):
     tasks = load_tasks()
@@ -118,30 +108,37 @@ async def send_daily_tasks(app):
                 now_day = str(datetime.utcnow().isoweekday())
                 if now_day in tasks:
                     try:
-                        await app.bot.send_message(
-                            chat_id=user_id,
-                            text=f"🌞 Доброе утро!\nВот задание на день {now_day}:\n\n{tasks[now_day]}"
-                        )
+                        await app.bot.send_message(chat_id=user_id, text=f"🌞 Доброе утро!\nВот задание на день {now_day}:\n\n{tasks[now_day]}")
                     except:
                         pass
 
+async def init_db():
+    async with aiosqlite.connect("database.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS progress (
+                user_id INTEGER,
+                day TEXT,
+                completed_at TEXT,
+                PRIMARY KEY (user_id, day)
+            );
+        """)
+        await db.commit()
 
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    await init_db()
 
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(button))
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(lambda: asyncio.create_task(send_daily_tasks(app)), "cron", hour=7)
+    scheduler.add_job(lambda: send_daily_tasks(app), 'cron', hour=7)
     scheduler.start()
 
     print("✅ Бот запущен")
     await app.run_polling()
 
-
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    import asyncio
+    asyncio.run(main())
