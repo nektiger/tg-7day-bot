@@ -4,7 +4,9 @@ services:
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
-    envVars:
-      - key: TOKEN
-        value: 8467489835:AAF09FNV4dW1DVAMikyZeq1eIRu7oZgabws
+envVars:
+  - key: TOKEN
+    value: ${TOKEN}
+    autoDeploy: true
+V4dW1DVAMikyZeq1eIRu7oZgabws
     autoDeploy: true
