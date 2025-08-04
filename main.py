@@ -1,6 +1,11 @@
+import telegram
+print("python-telegram-bot version:", telegram.__version__)
+
 import json
 import aiosqlite
-import os
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,31 +13,21 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes
 )
+import os
 
 TOKEN = os.getenv("TOKEN")
 
 def load_tasks():
     with open("tasks.json", "r", encoding="utf-8") as f:
-        tasks = json.load(f)
-        # Проверяем, что вернулся словарь
-        if not isinstance(tasks, dict):
-            raise ValueError("tasks.json должен содержать объект JSON (словарь).")
-        return tasks
+        return json.load(f)
 
 def generate_day_keyboard(user_progress):
     buttons = []
     for i in range(1, 8):
-        # Первый день всегда разблокирован, остальные — если предыдущий день выполнен
-        unlocked = (i == 1) or (str(i - 1) in user_progress)
-        if str(i) in user_progress:
-            text = f"✅ День {i}"
-        elif unlocked:
-            text = f"🔓 День {i}"
-        else:
-            text = f"🔒 День {i}"
+        unlocked = str(i) == "1" or str(i - 1) in user_progress
+        text = f"✅ День {i}" if str(i) in user_progress else f"🔓 День {i}" if unlocked else f"🔒 День {i}"
         cb_data = f"day_{i}" if unlocked else "locked"
         buttons.append(InlineKeyboardButton(text, callback_data=cb_data))
-    # Кнопки по 3 в ряд
     return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,7 +40,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n"
-        f"Здесь ты найдёшь задания на 7 дней.\n"
+        f"Здесь ты найдешь задания на 7 дней.\n"
         f"Выбирай день ниже 👇",
         reply_markup=generate_day_keyboard(user_progress)
     )
@@ -61,18 +56,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("day_"):
         day = data.split("_")[1]
-        try:
-            tasks = load_tasks()
-        except Exception as e:
-            await query.answer(f"Ошибка загрузки заданий: {e}", show_alert=True)
+        tasks = load_tasks()
+        if not isinstance(tasks, dict):
+            await query.answer("❌ Ошибка загрузки заданий", show_alert=True)
             return
-
-        # Проверяем, что tasks — словарь
-        if isinstance(tasks, dict):
-            task = tasks.get(day, "❌ Задание не найдено.")
-        else:
-            task = "❌ Формат заданий неверный."
-
+        task = tasks.get(day, "❌ Задание не найдено.")
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
             reply_markup=InlineKeyboardMarkup([
@@ -108,7 +96,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             completed = sorted([int(row[0]) for row in await cursor.fetchall()])
     count = len(completed)
-    done = ", ".join([str(i) for i in completed]) if completed else "пока ничего"
+    done = ", ".join([f"{i}" for i in completed]) if completed else "пока ничего"
     await update.message.reply_text(
         f"📊 Твоя статистика:\n\n"
         f"Выполнено дней: {count} из 7\n"
@@ -125,7 +113,7 @@ async def send_daily_tasks(app):
                 if now_day in tasks:
                     try:
                         await app.bot.send_message(chat_id=user_id, text=f"🌞 Доброе утро!\nВот задание на день {now_day}:\n\n{tasks[now_day]}")
-                    except Exception:
+                    except:
                         pass
 
 async def init_db():
@@ -142,8 +130,8 @@ async def init_db():
 
 async def main():
     await init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
 
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(button))
@@ -156,8 +144,14 @@ async def main():
     await app.run_polling()
 
 if __name__ == "__main__":
-    import nest_asyncio
-    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
 
-    nest_asyncio.apply()  # чтобы избежать ошибки "event loop already running"
-    asyncio.run(main())
+    # Фиктивный сервер для Render, чтобы он "видел" порт
+    import http.server
+    import socketserver
+
+    port = int(os.environ.get("PORT", 10000))
+    with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as httpd:
+        print(f"🌐 Render слушает порт {port} (фиктивно)")
+        httpd.serve_forever()
