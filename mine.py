@@ -1,63 +1,56 @@
-import json
-import os
-from aiohttp import web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CallbackContext, CommandHandler, CallbackQueryHandler
+import logging import json from aiohttp import web from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update from telegram.ext import ( Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes )
+
+Замените на ваш токен
+
+TOKEN = "8467489835:AAF09FNV4dW1DVAMikyZeq1eIRu7oZgabws"
+
+Включаем логирование
+
+logging.basicConfig(level=logging.INFO) logger = logging.getLogger(name)
+
+Загрузка заданий из JSON-файла
+
+def load_tasks(): with open("tasks.json", encoding="utf-8") as f: return json.load(f)
+
+TASKS = load_tasks()
+
+Команда /start
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): keyboard = [[InlineKeyboardButton(f"День {i+1}", callback_data=f"day_{i+1}")] for i in range(7)] reply_markup = InlineKeyboardMarkup(keyboard)
+
+await update.message.reply_text(
+    "👋 Привет! Добро пожаловать в тренировочный бот!\nВыбери день, чтобы получить задание:",
+    reply_markup=reply_markup
 )
-from dotenv import load_dotenv
 
-load_dotenv()
-TOKEN = os.getenv("TOKEN")
+Обработка кнопок дней
 
-with open("tasks.json", "r", encoding="utf-8") as f:
-    TASKS = json.load(f)
+async def day_callback(update: Update, context: CallbackContext): query = update.callback_query await query.answer()
 
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"https://tg-7day-bot.onrender.com{WEBHOOK_PATH}"
+day_index = int(query.data.split("_")[1]) - 1
+day_tasks = TASKS.get(f"day_{day_index+1}", [])
 
-async def start(update: Update, context: CallbackContext):
-    keyboard = [
-        [InlineKeyboardButton(f"День {i}", callback_data=f"day_{i}")] for i in range(1, 8)
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Привет! Нажми на кнопку дня, чтобы получить задание:",
-        reply_markup=reply_markup
-    )
+if day_tasks:
+    response = f"📅 <b>День {day_index+1}</b>\n\n"
+    for idx, task in enumerate(day_tasks, 1):
+        response += f"<b>Задание {idx}:</b> {task}\n"
+else:
+    response = "❌ Заданий на этот день пока нет."
 
-async def button(update: Update, context: CallbackContext):
-    query = update.callback_query
-    await query.answer()
-    day = query.data.split("_")[1]
-    task = TASKS.get(f"day_{day}", "Задание не найдено.")
-    await query.edit_message_text(f"🗓 Задание на день {day}:\n\n{task}")
+await query.edit_message_text(
+    text=response,
+    parse_mode="HTML"
+)
 
-async def webhook_handler(request):
-    if request.method == "POST":
-        data = await request.json()
-        update = Update.de_json(data, app.bot)
-        await app.process_update(update)
-        return web.Response()
-    return web.Response(status=403)
+Webhook обработчик
 
-app = Application.builder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
+async def handler(request): data = await request.json() update = Update.de_json(data, application.bot) await application.initialize() await application.process_update(update) return web.Response()
 
-# 🌐 Запуск Webhook
-async def on_startup(app_obj):
-    await app.initialize()
-    await app.start()
-    await app.bot.set_webhook(WEBHOOK_URL)
+Основной код запуска
 
-async def on_cleanup(app_obj):
-    await app.stop()
+app = web.Application() app.router.add_post("/webhook/{token}", handler)
 
-web_app = web.Application()
-web_app.router.add_post(WEBHOOK_PATH, webhook_handler)
-web_app.on_startup.append(on_startup)
-web_app.on_cleanup.append(on_cleanup)
+application = Application.builder().token(TOKEN).build() application.add_handler(CommandHandler("start", start)) application.add_handler(CallbackQueryHandler(day_callback))
 
-if __name__ == "__main__":
-    web.run_app(web_app, host="0.0.0.0", port=10000)
+if name == 'main': web.run_app(app, port=10000)
+
