@@ -1,42 +1,37 @@
-import logging
-import json
 import os
+import json
+import logging
 from aiohttp import web
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ParseMode
-from telegram.ext import (
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = "8467489835:AAF09FNV4dW1DVAMikyZeq1eIRu7oZgabws"
+
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-PORT = int(os.getenv("PORT", "10000"))
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", "8443"))
 
-logging.basicConfig(level=logging.INFO)
-
-def load_tasks():
-    try:
-        with open("tasks.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-            else:
-                raise ValueError("tasks.json должен содержать словарь")
-    except Exception as e:
-        logging.error(f"Ошибка загрузки заданий: {e}")
-        return {}
-
-tasks = load_tasks()
+tasks = {
+    "1": "🧠 Задание на день 1: Прочитай статью о привычках и напиши 3 свои плохие привычки, которые хочешь изменить.",
+    "2": "📖 Задание на день 2: Проведи 15 минут в тишине без телефона. После — запиши, что почувствовал.",
+    "3": "📝 Задание на день 3: Составь план на неделю. Укажи 3 важные задачи и 2 второстепенные.",
+    "4": "💧 Задание на день 4: Пей воду в течение дня. Минимум 1,5 литра. Запиши, как это повлияло на твоё самочувствие.",
+    "5": "🏃 Задание на день 5: Прогуляйся на улице минимум 30 минут. Без телефона и наушников.",
+    "6": "📵 Задание на день 6: Устрой цифровой детокс на 2 часа. Никаких экранов. Чем ты занял это время?",
+    "7": "🎯 Задание на день 7: Напиши себе письмо в будущее. Расскажи, чего хочешь достичь через 1 месяц."
+}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(f"День {i}", callback_data=str(i))] for i in range(1, 8)
-    ]
+    keyboard = [[InlineKeyboardButton(str(i), callback_data=str(i)) for i in range(1, 8)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Привет! Выбери день, чтобы получить задание:", reply_markup=reply_markup
+        "Выберите день, чтобы получить задание:", reply_markup=reply_markup
     )
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,38 +39,38 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     day = query.data
     task = tasks.get(day, "❌ Задание не найдено.")
-    await query.edit_message_text(task, parse_mode=ParseMode.HTML)
+    await query.edit_message_text(text=task)
 
-# Инициализация приложения
-application = ApplicationBuilder().token(TOKEN).build()
+async def handler(request: web.Request):
+    app = request.app["bot_app"]
+    body = await request.text()
+    update = Update.de_json(json.loads(body), app.bot)
+    await app.process_update(update)
+    return web.Response(text="ok")
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(button))
+async def on_startup(app: web.Application):
+    webhook_url = f"https://tg-7day-bot.onrender.com{WEBHOOK_PATH}"
+    await app["bot_app"].bot.set_webhook(webhook_url)
+    logger.info(f"Webhook установлен: {webhook_url}")
 
-async def handle_webhook(request):
-    try:
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        # Инициализация вручную, чтобы избежать ошибки
-        if not application.is_initialized:
-            await application.initialize()
-            await application.start()
-        await application.process_update(update)
-        return web.Response(text="ok")
-    except Exception as e:
-        logging.error("Ошибка обработки запроса", exc_info=e)
-        return web.Response(status=500, text="error")
+async def on_shutdown(app: web.Application):
+    await app["bot_app"].bot.delete_webhook()
+    logger.info("Webhook удалён")
 
-# Создаём aiohttp сервер
-app = web.Application()
-app.router.add_post(WEBHOOK_PATH, handle_webhook)
+def main():
+    application = Application.builder().token(TOKEN).build()
 
-async def on_startup(app):
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
-    await application.bot.set_webhook(webhook_url)
-    logging.info(f"Webhook установлен: {webhook_url}")
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button))
 
-app.on_startup.append(on_startup)
+    app = web.Application()
+    app["bot_app"] = application
+
+    app.router.add_post(WEBHOOK_PATH, handler)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
 
 if __name__ == "__main__":
-    web.run_app(app, port=PORT)
+    main()
