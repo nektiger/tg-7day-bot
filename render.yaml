@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: tg-7day-bot
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
-    envVars:
-      - key: TOKEN
-        value: ${TOKEN}

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: tg-7day-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PORT
+        value: 10000
+    envVars:
+      - key: TOKEN
+        value: ${TOKEN}
