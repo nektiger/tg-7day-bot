@@ -40,35 +40,44 @@ async def show_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handler(request):
     data = await request.json()
-    update = Update.de_json(data, bot)
+    update = Update.de_json(data, app.bot)  # используй app.bot, а не bot отдельно
     await app.process_update(update)
-    return web.Response()
+    return web.Response(text="ok")
 
 async def main():
     load_tasks()
 
-    global app, bot
+    global app
     app = Application.builder().token(TOKEN).build()
-    bot = app.bot
 
+    # Добавляем хэндлеры
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("day", show_task))
 
-    app.add_handler(CommandHandler(str(i), show_task) for i in range(1, 8))
+    # Команды с цифрами 1-7 — добавим через цикл
+    for i in range(1, 8):
+        app.add_handler(CommandHandler(str(i), show_task))
 
-    # Настройка webhook
-    await bot.set_webhook(WEBHOOK_URL)
+    # Инициализируем и запускаем приложение
+    await app.initialize()
+    await app.start()
 
-    # Запуск aiohttp-сервера
-    runner = web.AppRunner(web.Application())
+    # Устанавливаем webhook
+    await app.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
+
+    # Создаем aiohttp приложение и регистрируем обработчик webhook
+    aio_app = web.Application()
+    aio_app.router.add_post(f"/webhook/{TOKEN}", handler)
+
+    runner = web.AppRunner(aio_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
-    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
+    logger.info(f"Сервер запущен на порту {PORT}")
 
-    # Бесконечный цикл
+    # Чтобы приложение не завершилось
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
