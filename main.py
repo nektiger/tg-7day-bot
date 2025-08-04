@@ -1,69 +1,75 @@
+import os
 import json
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 from aiohttp import web
-import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-# Твой токен бота:
-BOT_TOKEN = "8467489835:AAF09FNV4dW1DVAMikyZeq1eIRu7oZgabws"
-# URL для webhook:
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-
+# Логгирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Загружаем задания из файла при старте
-with open("tasks.json", "r", encoding="utf-8") as f:
-    tasks = json.load(f)  # tasks — словарь с ключами "1", "2" ...
+# Загрузка заданий
+def load_tasks():
+    try:
+        with open("tasks.json", "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+            if not isinstance(tasks, dict):
+                raise ValueError("Файл tasks.json должен содержать объект JSON (словарь)")
+            return tasks
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке tasks.json: {e}")
+        return {}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(f"День {day}", callback_data=str(day))]
-        for day in sorted(tasks.keys(), key=int)
+tasks = load_tasks()
+
+# Создание клавиатуры
+def get_keyboard():
+    buttons = [
+        [InlineKeyboardButton(f"День {i}", callback_data=str(i))]
+        for i in range(1, 8)
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Выбери день для задания:", reply_markup=reply_markup)
+    return InlineKeyboardMarkup(buttons)
 
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Привет! Нажми на день, чтобы получить задание.",
+        reply_markup=get_keyboard()
+    )
+
+# Обработка кнопок
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     day = query.data
     task = tasks.get(day, "❌ Задание не найдено.")
-    await query.edit_message_text(text=f"Задание на день {day}:\n\n{task}")
+    await query.edit_message_text(text=task, reply_markup=get_keyboard())
 
+# Webhook обработчик
 async def handler(request):
     try:
         data = await request.json()
-        update = Update.de_json(data)
+        update = Update.de_json(data, application.bot)
+        await application.initialize()
         await application.process_update(update)
         return web.Response(text="ok")
     except Exception as e:
-        logger.error(f"Ошибка обработки запроса: {e}")
-        return web.Response(status=500, text="Internal Server Error")
+        logger.error("Ошибка обработки запроса", exc_info=e)
+        return web.Response(status=500, text="error")
 
-async def main():
-    global application
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+# Инициализация
+TOKEN = os.getenv("TOKEN")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = f"https://tg-7day-bot.onrender.com{WEBHOOK_PATH}"
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
+application = Application.builder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(button))
 
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handler)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
-    await site.start()
-
-    logger.info("Бот запущен и слушает webhook...")
-
-    await application.initialize()
-    await application.start()
-    # Ждем запросов по webhook, polling не нужен
-    await asyncio.Event().wait()
+# Запуск Aiohttp-сервера
+app = web.Application()
+app.router.add_post(WEBHOOK_PATH, handler)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(app, port=10000)

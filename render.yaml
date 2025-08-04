@@ -6,8 +6,4 @@ services:
     startCommand: "python main.py"
     envVars:
       - key: TOKEN
-        value: ${TOKEN}EN}
-#///ический деплой
-    envVars:
-      - key: TOKEN
         value: ${TOKEN}
