@@ -1,10 +1,13 @@
 services:
-  - type: web
+  - type: worker
     name: tg-7day-bot
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
-    autoDeploy: false  # 🚫 отключаем автоматический деплой
+    envVars:
+      - key: TOKEN
+        value: ${TOKEN}
+атический деплой
     envVars:
       - key: TOKEN
         value: ${TOKEN}
