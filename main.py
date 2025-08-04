@@ -1,17 +1,18 @@
-import json
 import os
+import json
 import aiosqlite
 import asyncio
-from datetime import datetime
 from aiohttp import web
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    ContextTypes
+    Application, ApplicationBuilder, CommandHandler,
+    CallbackQueryHandler, ContextTypes
 )
 
 TOKEN = os.getenv("TOKEN")
+WEBHOOK_SECRET = "secret-path"  # любой путь, сложный для подбора
+PORT = int(os.environ.get('PORT', 10000))
 
 def load_tasks():
     with open("tasks.json", "r", encoding="utf-8") as f:
@@ -29,14 +30,13 @@ def generate_day_keyboard(user_progress):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
+
     async with aiosqlite.connect("database.db") as db:
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             user_progress = {row[0] for row in await cursor.fetchall()}
 
     await update.message.reply_text(
-        f"👋 Привет, {user.first_name}!\n"
-        f"Здесь ты найдешь задания на 7 дней.\n"
-        f"Выбирай день ниже 👇",
+        f"👋 Привет, {user.first_name}!\nЗдесь ты найдешь задания на 7 дней.\nВыбирай день ниже 👇",
         reply_markup=generate_day_keyboard(user_progress)
     )
 
@@ -44,7 +44,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
-    tasks = load_tasks()
 
     if data == "locked":
         await query.answer("Сначала выполни предыдущий день 🔒", show_alert=True)
@@ -52,6 +51,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("day_"):
         day = data.split("_")[1]
+        tasks = load_tasks()
         task = tasks.get(day, "❌ Задание не найдено.")
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
@@ -62,6 +62,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("done_"):
         day = data.split("_")[1]
+
         async with aiosqlite.connect("database.db") as db:
             async with db.execute("SELECT 1 FROM progress WHERE user_id = ? AND day = ?", (user_id, day)) as cursor:
                 if await cursor.fetchone():
@@ -72,6 +73,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (user_id, day, datetime.utcnow().isoformat())
             )
             await db.commit()
+
             async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
                 user_progress = {row[0] for row in await cursor.fetchall()}
 
@@ -86,11 +88,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             completed = sorted([int(row[0]) for row in await cursor.fetchall()])
     count = len(completed)
-    done = ", ".join([f"{i}" for i in completed]) if completed else "пока ничего"
+    done = ", ".join([str(i) for i in completed]) if completed else "пока ничего"
     await update.message.reply_text(
-        f"📊 Твоя статистика:\n\n"
-        f"Выполнено дней: {count} из 7\n"
-        f"Завершено: {done}"
+        f"📊 Твоя статистика:\n\nВыполнено дней: {count} из 7\nЗавершено: {done}"
     )
 
 async def init_db():
@@ -105,38 +105,41 @@ async def init_db():
         """)
         await db.commit()
 
-async def main():
-    await init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
+async def handler(request):
+    if request.match_info.get('token') != WEBHOOK_SECRET:
+        return web.Response(status=403)
+    data = await request.json()
+    update = Update.de_json(data, app.bot)
+    await app.process_update(update)
+    return web.Response()
 
+async def main():
+    global app
+    await init_db()
+
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(button))
 
-    # Запуск webhook
-    WEBHOOK_PATH = "/webhook"
-    WEBHOOK_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
+    await app.initialize()  # Важно!
+    await app.bot.set_webhook(
+        url=f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{WEBHOOK_SECRET}"
+    )
 
-    await app.bot.set_webhook(WEBHOOK_URL)
-
-    async def handler(request):
-        data = await request.json()
-        update = Update.de_json(data, app.bot)
-        await app.process_update(update)
-        return web.Response()
-
+    # AIOHTTP сервер
     web_app = web.Application()
-    web_app.router.add_post(WEBHOOK_PATH, handler)
-
+    web_app.router.add_post(f'/{WEBHOOK_SECRET}', handler)
     runner = web.AppRunner(web_app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000)))
+    site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
     await site.start()
-
-    print("✅ Бот запущен по webhook")
+    print("✅ Webhook запущен")
 
     while True:
         await asyncio.sleep(3600)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    import nest_asyncio
+    nest_asyncio.apply()
     asyncio.run(main())
