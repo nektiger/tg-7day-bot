@@ -1,82 +1,91 @@
-import os
-import json
 import logging
+import json
+import os
 from aiohttp import web
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.ext import defaults as tg_defaults
-import asyncio
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackContext,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    Defaults,
+)
+from dotenv import load_dotenv
 
-TOKEN = os.getenv("TOKEN")  # обязательно установи переменную окружения
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-PORT = int(os.environ.get("PORT", 10000))
+load_dotenv()
 
-# Настройка логирования
+# Настройки
+TOKEN = os.getenv("TOKEN")
+WEBHOOK_SECRET_PATH = f"/webhook/{TOKEN}"
+PORT = int(os.environ.get("PORT", "10000"))
+
+# Логгирование
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# Загружаем задания
+# Загрузка заданий
 def load_tasks():
-    with open("tasks.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open("tasks.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            else:
+                raise ValueError("tasks.json должен содержать словарь")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки заданий: {e}")
+        return {}
 
 tasks = load_tasks()
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [{"text": f"День {i}", "callback_data": str(i)}] for i in range(1, 8)
+        [InlineKeyboardButton(f"День {i}", callback_data=str(i))] for i in range(1, 8)
     ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Привет! Выбери день, чтобы получить задание.",
-        reply_markup={"inline_keyboard": keyboard}
+        "Привет! Выбери день, чтобы получить задание:", reply_markup=reply_markup
     )
 
 # Обработка кнопок
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     day = query.data
     task = tasks.get(day, "❌ Задание не найдено.")
     await query.edit_message_text(task)
 
-# Обработка webhook-запроса
+# Webhook handler
 async def handler(request):
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
-        return web.Response(status=200)
+        return web.Response(text="ok")
     except Exception as e:
-        logger.error("Ошибка обработки запроса", exc_info=e)
-        return web.Response(status=500)
+        logging.error("Ошибка обработки запроса", exc_info=e)
+        return web.Response(status=500, text="error")
 
-# Основная точка входа
-async def main():
-    global application
-    application = Application.builder().token(TOKEN).build()
+# Инициализация
+defaults = Defaults(parse_mode=ParseMode.HTML)
+application = ApplicationBuilder().token(TOKEN).defaults(defaults).build()
 
-    # Инициализация бота вручную
-    await application.initialize()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(button))
 
-    # Обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
+# AIOHTTP web-сервер
+app = web.Application()
+app.router.add_post(WEBHOOK_SECRET_PATH, handler)
 
-    # Настраиваем aiohttp веб-сервер
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handler)
+# Установка webhook при запуске
+async def on_startup(app):
+    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_SECRET_PATH}"
+    await application.bot.set_webhook(webhook_url)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-
-    logger.info("✅ Бот запущен")
-    await application.start()  # Не забываем стартовать бота
-    await application.updater.start_polling()  # Запускаем внутреннюю очередь
-    await application.updater.idle()
+# Запуск
+app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(app, port=PORT)
