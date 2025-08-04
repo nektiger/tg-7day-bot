@@ -1,19 +1,15 @@
-import telegram
-print("python-telegram-bot version:", telegram.__version__)
-
 import json
+import os
 import aiosqlite
 import asyncio
-import nest_asyncio
-nest_asyncio.apply()
 from datetime import datetime
+from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes
 )
-import os
 
 TOKEN = os.getenv("TOKEN")
 
@@ -33,7 +29,6 @@ def generate_day_keyboard(user_progress):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
-
     async with aiosqlite.connect("database.db") as db:
         async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
             user_progress = {row[0] for row in await cursor.fetchall()}
@@ -49,6 +44,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
+    tasks = load_tasks()
 
     if data == "locked":
         await query.answer("Сначала выполни предыдущий день 🔒", show_alert=True)
@@ -56,10 +52,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("day_"):
         day = data.split("_")[1]
-        tasks = load_tasks()
-        if not isinstance(tasks, dict):
-            await query.answer("❌ Ошибка загрузки заданий", show_alert=True)
-            return
         task = tasks.get(day, "❌ Задание не найдено.")
         await query.edit_message_text(
             f"📌 Задание для дня {day}:\n\n{task}",
@@ -70,7 +62,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("done_"):
         day = data.split("_")[1]
-
         async with aiosqlite.connect("database.db") as db:
             async with db.execute("SELECT 1 FROM progress WHERE user_id = ? AND day = ?", (user_id, day)) as cursor:
                 if await cursor.fetchone():
@@ -81,7 +72,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (user_id, day, datetime.utcnow().isoformat())
             )
             await db.commit()
-
             async with db.execute("SELECT day FROM progress WHERE user_id = ?", (user_id,)) as cursor:
                 user_progress = {row[0] for row in await cursor.fetchall()}
 
@@ -103,19 +93,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Завершено: {done}"
     )
 
-async def send_daily_tasks(app):
-    tasks = load_tasks()
-    async with aiosqlite.connect("database.db") as db:
-        async with db.execute("SELECT DISTINCT user_id FROM progress") as cursor:
-            user_ids = [row[0] for row in await cursor.fetchall()]
-            for user_id in user_ids:
-                now_day = str(datetime.utcnow().isoweekday())
-                if now_day in tasks:
-                    try:
-                        await app.bot.send_message(chat_id=user_id, text=f"🌞 Доброе утро!\nВот задание на день {now_day}:\n\n{tasks[now_day]}")
-                    except:
-                        pass
-
 async def init_db():
     async with aiosqlite.connect("database.db") as db:
         await db.execute("""
@@ -130,28 +107,36 @@ async def init_db():
 
 async def main():
     await init_db()
-
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(button))
 
-    scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(lambda: send_daily_tasks(app), 'cron', hour=7)
-    scheduler.start()
+    # Запуск webhook
+    WEBHOOK_PATH = "/webhook"
+    WEBHOOK_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
 
-    print("✅ Бот запущен")
-    await app.run_polling()
+    await app.bot.set_webhook(WEBHOOK_URL)
+
+    async def handler(request):
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        await app.process_update(update)
+        return web.Response()
+
+    web_app = web.Application()
+    web_app.router.add_post(WEBHOOK_PATH, handler)
+
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000)))
+    await site.start()
+
+    print("✅ Бот запущен по webhook")
+
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-
-    # Фиктивный сервер для Render, чтобы он "видел" порт
-    import http.server
-    import socketserver
-
-    port = int(os.environ.get("PORT", 10000))
-    with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as httpd:
-        print(f"🌐 Render слушает порт {port} (фиктивно)")
-        httpd.serve_forever()
+    asyncio.run(main())

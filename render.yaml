@@ -1,12 +1,12 @@
 services:
-  - type: worker
+  - type: web
     name: tg-7day-bot
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
     envVars:
       - key: TOKEN
-        value: ${TOKEN}
+        value: ${TOKEN}EN}
 #///ический деплой
     envVars:
       - key: TOKEN
